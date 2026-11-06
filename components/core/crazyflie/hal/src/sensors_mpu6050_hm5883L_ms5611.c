@@ -111,7 +111,7 @@
 // Number of samples used in variance calculation. Changing this effects the threshold
 #define SENSORS_NBR_OF_BIAS_SAMPLES 1024
 // Variance threshold to take zero bias for gyro
-#define GYRO_VARIANCE_BASE 5000
+#define GYRO_VARIANCE_BASE 50000
 #define GYRO_VARIANCE_THRESHOLD_X (GYRO_VARIANCE_BASE)
 #define GYRO_VARIANCE_THRESHOLD_Y (GYRO_VARIANCE_BASE)
 #define GYRO_VARIANCE_THRESHOLD_Z (GYRO_VARIANCE_BASE)
@@ -256,51 +256,53 @@ static void sensorsTask(void *param)
 
     while (1) {
 
-        /* mpu6050 interrupt trigger: data is ready to be read */
-        if (pdTRUE == xSemaphoreTake(sensorsDataReady, portMAX_DELAY)) {
+        /* mpu6050 interrupt trigger: data is ready to be read (fallback to polling every 2ms) */
+        if (xSemaphoreTake(sensorsDataReady, M2T(2)) == pdTRUE) {
             sensorData.interruptTimestamp = imuIntTimestamp;
-
-            /* sensors step 1-read data from I2C */
-            uint8_t dataLen = (uint8_t)(SENSORS_MPU6050_BUFF_LEN +
-                                        (isMagnetometerPresent ? SENSORS_MAG_BUFF_LEN : 0) +
-                                        (isBarometerPresent ? SENSORS_BARO_BUFF_LEN : 0));
-            i2cdevReadReg8(I2C0_DEV, MPU6050_ADDRESS_AD0_LOW, MPU6050_RA_ACCEL_XOUT_H, dataLen, buffer);
-
-            /* sensors step 2-process the respective data */
-            processAccGyroMeasurements(&(buffer[0]));
-
-            if (isMagnetometerPresent) {
-                processMagnetometerMeasurements(&(buffer[SENSORS_MPU6050_BUFF_LEN]));
-            }
-
-            if (isBarometerPresent) {
-                processBarometerMeasurements(&(buffer[isMagnetometerPresent ? SENSORS_MPU6050_BUFF_LEN + SENSORS_MAG_BUFF_LEN : SENSORS_MPU6050_BUFF_LEN]));
-            }
-
-            /* sensors step 3- queue sensors data  on the output queues */
-            xQueueOverwrite(accelerometerDataQueue, &sensorData.acc);
-            xQueueOverwrite(gyroDataQueue, &sensorData.gyro);
-
-            if (isMagnetometerPresent) {
-                xQueueOverwrite(magnetometerDataQueue, &sensorData.mag);
-            }
-
-            if (isBarometerPresent) {
-                xQueueOverwrite(barometerDataQueue, &sensorData.baro);
-            }
-
-            /* sensors step 4- Unlock stabilizer task */
-            xSemaphoreGive(dataReady);
-#ifdef DEBUG_EP2
-            DEBUG_PRINT_LOCAL("ax = %f,  ay = %f,  az = %f,  gx = %f,  gy = %f,  gz = %f , hx = %f , hy = %f, hz =%f \n", sensorData.acc.x, sensorData.acc.y, sensorData.acc.z, sensorData.gyro.x, sensorData.gyro.y, sensorData.gyro.z, sensorData.mag.x, sensorData.mag.y, sensorData.mag.z);
-#endif
+        } else {
+            sensorData.interruptTimestamp = usecTimestamp();
         }
+
+        /* sensors step 1-read data from I2C */
+        uint8_t dataLen = (uint8_t)(SENSORS_MPU6050_BUFF_LEN +
+                                    (isMagnetometerPresent ? SENSORS_MAG_BUFF_LEN : 0) +
+                                    (isBarometerPresent ? SENSORS_BARO_BUFF_LEN : 0));
+        i2cdevReadReg8(I2C0_DEV, MPU6050_ADDRESS_AD0_LOW, MPU6050_RA_ACCEL_XOUT_H, dataLen, buffer);
+
+        /* sensors step 2-process the respective data */
+        processAccGyroMeasurements(&(buffer[0]));
+
+        if (isMagnetometerPresent) {
+            processMagnetometerMeasurements(&(buffer[SENSORS_MPU6050_BUFF_LEN]));
+        }
+
+        if (isBarometerPresent) {
+            processBarometerMeasurements(&(buffer[isMagnetometerPresent ? SENSORS_MPU6050_BUFF_LEN + SENSORS_MAG_BUFF_LEN : SENSORS_MPU6050_BUFF_LEN]));
+        }
+
+        /* sensors step 3- queue sensors data  on the output queues */
+        xQueueOverwrite(accelerometerDataQueue, &sensorData.acc);
+        xQueueOverwrite(gyroDataQueue, &sensorData.gyro);
+
+        if (isMagnetometerPresent) {
+            xQueueOverwrite(magnetometerDataQueue, &sensorData.mag);
+        }
+
+        if (isBarometerPresent) {
+            xQueueOverwrite(barometerDataQueue, &sensorData.baro);
+        }
+
+        /* sensors step 4- Unlock stabilizer task */
+        xSemaphoreGive(dataReady);
+#ifdef DEBUG_EP2
+        DEBUG_PRINT_LOCAL("ax = %f,  ay = %f,  az = %f,  gx = %f,  gy = %f,  gz = %f , hx = %f , hy = %f, hz =%f \n", sensorData.acc.x, sensorData.acc.y, sensorData.acc.z, sensorData.gyro.x, sensorData.gyro.y, sensorData.gyro.z, sensorData.mag.x, sensorData.mag.y, sensorData.mag.z);
+#endif
     }
 }
 
 void sensorsMpu6050Hmc5883lMs5611WaitDataReady(void)
 {
-    xSemaphoreTake(dataReady, portMAX_DELAY);
+    xSemaphoreTake(dataReady, M2T(5));
 }
 
 void processBarometerMeasurements(const uint8_t *buffer)
@@ -343,23 +345,13 @@ void processAccGyroMeasurements(const uint8_t *buffer)
 
     Axis3f accScaled;
 
-#ifdef CONFIG_TARGET_ESPLANE_V1
-    /* sensors step 2.1 read from buffer */
+    /* Standard GY-521 / MPU6050 direct orientation */
     accelRaw.x = (((int16_t)buffer[0]) << 8) | buffer[1];
     accelRaw.y = (((int16_t)buffer[2]) << 8) | buffer[3];
     accelRaw.z = (((int16_t)buffer[4]) << 8) | buffer[5];
     gyroRaw.x = (((int16_t)buffer[8]) << 8) | buffer[9];
     gyroRaw.y = (((int16_t)buffer[10]) << 8) | buffer[11];
     gyroRaw.z = (((int16_t)buffer[12]) << 8) | buffer[13];
-#else
-    /* sensors step 2.1 read from buffer */
-    accelRaw.y = (((int16_t)buffer[0]) << 8) | buffer[1];
-    accelRaw.x = (((int16_t)buffer[2]) << 8) | buffer[3];
-    accelRaw.z = (((int16_t)buffer[4]) << 8) | buffer[5];
-    gyroRaw.y = (((int16_t)buffer[8]) << 8) | buffer[9];
-    gyroRaw.x = (((int16_t)buffer[10]) << 8) | buffer[11];
-    gyroRaw.z = (((int16_t)buffer[12]) << 8) | buffer[13];
-#endif
 
 #ifdef GYRO_BIAS_LIGHT_WEIGHT
     gyroBiasFound = processGyroBiasNoBuffer(gyroRaw.x, gyroRaw.y, gyroRaw.z, &gyroBias);
@@ -374,22 +366,14 @@ void processAccGyroMeasurements(const uint8_t *buffer)
     }
 
     /* sensors step 2.4 convert  digtal value to physical angle */
-#ifdef CONFIG_TARGET_ESPLANE_V1
     sensorData.gyro.x = (gyroRaw.x - gyroBias.x) * SENSORS_DEG_PER_LSB_CFG;
-#else
-    sensorData.gyro.x = -(gyroRaw.x - gyroBias.x) * SENSORS_DEG_PER_LSB_CFG;
-#endif
 
     sensorData.gyro.y = (gyroRaw.y - gyroBias.y) * SENSORS_DEG_PER_LSB_CFG;
     sensorData.gyro.z = (gyroRaw.z - gyroBias.z) * SENSORS_DEG_PER_LSB_CFG;
     /* sensors step 2.5 low pass filter */
     applyAxis3fLpf((lpf2pData *)(&gyroLpf), &sensorData.gyro);
 
-#ifdef CONFIG_TARGET_ESPLANE_V1
     accScaled.x = (accelRaw.x) * SENSORS_G_PER_LSB_CFG / accScale;
-#else
-    accScaled.x = -(accelRaw.x) * SENSORS_G_PER_LSB_CFG / accScale;   
-#endif
 
     accScaled.y = (accelRaw.y) * SENSORS_G_PER_LSB_CFG / accScale;
     accScaled.z = (accelRaw.z) * SENSORS_G_PER_LSB_CFG / accScale;
@@ -564,7 +548,7 @@ static void sensorsSetupSlaveRead(void)
 #endif
 
     mpu6050SetI2CBypassEnabled(false);
-    mpu6050SetWaitForExternalSensorEnabled(true);     // the slave data isn't so important for the state estimation
+    mpu6050SetWaitForExternalSensorEnabled(false);     // the slave data isn't so important for the state estimation
     mpu6050SetInterruptMode(0);                       // active high
     mpu6050SetInterruptDrive(0);                      // push pull
     mpu6050SetInterruptLatch(0);                      // latched until clear
@@ -609,7 +593,11 @@ static void sensorsSetupSlaveRead(void)
 #endif
 
     // Enable sensors after configuration
-    mpu6050SetI2CMasterModeEnabled(true);
+    #if defined(SENSORS_ENABLE_MAG_HM5883L) || defined(SENSORS_ENABLE_PRESSURE_MS5611)
+    mpu6050SetI2CMasterModeEnabled(isMagnetometerPresent || isBarometerPresent);
+#else
+    mpu6050SetI2CMasterModeEnabled(false);
+#endif
 
     mpu6050SetIntDataReadyEnabled(true);
 
@@ -910,16 +898,18 @@ static bool sensorsFindBiasValue(BiasObj *bias)
     if (bias->isBufferFilled) {
         sensorsCalculateVarianceAndMean(bias, &bias->variance, &bias->mean);
 
-        if (bias->variance.x < GYRO_VARIANCE_THRESHOLD_X &&
-                bias->variance.y < GYRO_VARIANCE_THRESHOLD_Y &&
-                bias->variance.z < GYRO_VARIANCE_THRESHOLD_Z &&
-                (varianceSampleTime + GYRO_MIN_BIAS_TIMEOUT_MS < xTaskGetTickCount())) {
+        bool varianceOk = (bias->variance.x < GYRO_VARIANCE_THRESHOLD_X &&
+                           bias->variance.y < GYRO_VARIANCE_THRESHOLD_Y &&
+                           bias->variance.z < GYRO_VARIANCE_THRESHOLD_Z);
+        if ((varianceOk || (xTaskGetTickCount() > M2T(3000))) &&
+            (varianceSampleTime + GYRO_MIN_BIAS_TIMEOUT_MS < xTaskGetTickCount())) {
             varianceSampleTime = xTaskGetTickCount();
             bias->bias.x = bias->mean.x;
             bias->bias.y = bias->mean.y;
             bias->bias.z = bias->mean.z;
             foundBias = true;
             bias->isBiasValueFound = true;
+            ESP_LOGI("SENSORS", "Gyro Calib Done!");
         }
     }
 

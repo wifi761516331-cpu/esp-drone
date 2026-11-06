@@ -422,12 +422,23 @@ THE SOFTWARE.
 #define MPU6050_ST_ACCEL_LOW     0.300  // G
 #define MPU6050_ST_ACCEL_HIGH    0.950  // G
 
+// Full 8-bit WHO_AM_I (reg 0x75) values of supported register-compatible chips
+#define MPU6050_WHO_AM_I_MPU6050 0x68
+#define MPU6050_WHO_AM_I_MPU6500 0x70
+#define MPU6050_WHO_AM_I_MPU9250 0x71
+#define MPU6050_WHO_AM_I_MPU9255 0x73
+
+// MPU6500-family only: accelerometer DLPF config register
+#define MPU6500_RA_ACCEL_CONFIG2 0x1D
+
 // note: DMP code memory blocks defined at end of header file
 
 void mpu6050Init(I2C_Dev *i2cPort);
 bool mpu6050Test(void);
 
 bool mpu6050TestConnection();
+uint8_t mpu6050GetWhoAmIRaw(void);
+bool mpu6050IsMpu6500Family(void);
 bool mpu6050EvaluateSelfTest(float low, float high, float value, char *string);
 bool mpu6050SelfTest();
 

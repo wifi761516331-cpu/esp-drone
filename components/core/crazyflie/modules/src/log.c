@@ -860,12 +860,14 @@ void logRunBlock(void * arg)
 
   // Check if the connection is still up, oherwise disable
   // all the logging and flush all the CRTP queues.
+#ifndef CONFIG_TRANSPORT_NATIVE_WIFI
   if (!crtpIsConnected())
   {
     logReset();
     crtpReset();
   }
   else
+#endif
   {
     crtpSendPacket(&pk);
   }

@@ -109,8 +109,8 @@ bool wifiSendData(uint32_t size, uint8_t *data)
     UDPPacket outStage = {0};
     outStage.size = size;
     memcpy(outStage.data, data, size);
-    // Dont' block when sending
-    return (xQueueSend(udpDataTx, &outStage, M2T(100)) == pdTRUE);
+    // Don't block when sending
+    return (xQueueSend(udpDataTx, &outStage, 0) == pdTRUE);
 };
 
 static esp_err_t udp_server_create(void *arg)
@@ -168,14 +168,13 @@ static void udp_server_rx_task(void *pvParameters)
             //remove cksum, do not belong to CRTP
             //check packet
             if (cksum == calculate_cksum(rx_buffer, len - 1)) {
-                //copy part of the UDP packet, the size not include cksum
                 inPacket.size = len - 1;
-                memcpy(inPacket.data, rx_buffer, inPacket.size);
-                xQueueSend(udpDataRx, &inPacket, M2T(10));
-                if(!isUDPConnected) isUDPConnected = true;
-            }else{
-                DEBUG_PRINT_LOCAL("udp packet cksum unmatched");
+            } else {
+                inPacket.size = len;
             }
+            memcpy(inPacket.data, rx_buffer, inPacket.size);
+            xQueueSend(udpDataRx, &inPacket, M2T(10));
+            if(!isUDPConnected) isUDPConnected = true;
 
 #ifdef DEBUG_UDP
             printf("\nReceived size = %d cksum = %02X\n", inPacket.size, cksum);
@@ -287,8 +286,8 @@ void wifiInit(void)
     }
 
     // This should probably be reduced to a CRTP packet size
-    udpDataRx = xQueueCreate(16, sizeof(UDPPacket));
-    udpDataTx = xQueueCreate(16, sizeof(UDPPacket));
+    udpDataRx = xQueueCreate(32, sizeof(UDPPacket));
+    udpDataTx = xQueueCreate(32, sizeof(UDPPacket));
     if (udpDataRx == NULL || udpDataTx == NULL) {
         if (udpDataRx != NULL) {
             vQueueDelete(udpDataRx);

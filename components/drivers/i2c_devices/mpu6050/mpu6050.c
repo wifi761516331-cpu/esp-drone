@@ -28,6 +28,7 @@
  ===============================================
  */
 
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -42,6 +43,7 @@ static uint8_t devAddr;
 static I2C_Dev *I2Cx;
 static uint8_t buffer[14];
 static bool isInit;
+static uint8_t whoAmIRaw;
 
 /** Default constructor, uses default I2C address.
  * @see MPU6050_DEFAULT_ADDRESS
@@ -78,7 +80,34 @@ bool mpu6050Test(void)
 bool mpu6050TestConnection()
 {
     vTaskDelay(M2T(100));
-    return mpu6050GetDeviceID() == 0b110100;
+    uint8_t id = 0;
+    if (!i2cdevReadByte(I2Cx, devAddr, MPU6050_RA_WHO_AM_I, &id)) {
+        return false;
+    }
+    whoAmIRaw = id;
+    switch (id) {
+    case MPU6050_WHO_AM_I_MPU6050:  // genuine MPU6050
+    case MPU6050_WHO_AM_I_MPU6500:  // MPU6500 (common on "GY-521" clones)
+    case MPU6050_WHO_AM_I_MPU9250:  // MPU9250 (MPU6500 + AK8963)
+    case MPU6050_WHO_AM_I_MPU9255:  // MPU9255
+        return true;
+    default:
+        return false;
+    }
+}
+
+/** Raw WHO_AM_I value read by the last successful mpu6050TestConnection(). */
+uint8_t mpu6050GetWhoAmIRaw(void)
+{
+    return whoAmIRaw;
+}
+
+/** True when the detected chip is an MPU6500-family part (MPU6500/9250/9255). */
+bool mpu6050IsMpu6500Family(void)
+{
+    return whoAmIRaw == MPU6050_WHO_AM_I_MPU6500 ||
+           whoAmIRaw == MPU6050_WHO_AM_I_MPU9250 ||
+           whoAmIRaw == MPU6050_WHO_AM_I_MPU9255;
 }
 
 /** Do a MPU6050 self test.
@@ -107,7 +136,21 @@ bool mpu6050SelfTest()
         vTaskDelay(M2T(2));
     }
 
-    // First measurement
+    // First measurement (MPU6500-family: plausibility check instead, see below)
+    if (mpu6050IsMpu6500Family()) {
+        // MPU6500-family self-test responses do not match the MPU6050 limits
+        // used here, so check plausibility instead: at rest the accel norm
+        // must be close to 1 g and the gyro must not report large rotation.
+        float ax = axi16 * aRange, ay = ayi16 * aRange, az = azi16 * aRange;
+        float norm = sqrtf(ax * ax + ay * ay + az * az);
+        float gmax = fmaxf(fabsf(gxi16 * gRange), fmaxf(fabsf(gyi16 * gRange), fabsf(gzi16 * gRange)));
+        bool ok = (norm > 0.7f && norm < 1.3f) && (gmax < 50.0f);
+        if (!ok) {
+            DEBUG_PRINTD("mpu6500 plausibility [FAIL]. |acc| = %0.2f g, max gyro = %0.1f deg/s\n",
+                         (double)norm, (double)gmax);
+        }
+        return ok;
+    }
     gxf = gxi16 * gRange;
     gyf = gyi16 * gRange;
     gzf = gzi16 * gRange;
